@@ -1,8 +1,8 @@
-//! Modul penanganan protokol Model Context Protocol (MCP) dan JSON-RPC.
+//! Model Context Protocol (MCP) and JSON-RPC protocol handling module.
 //!
-//! Modul ini mengelola komunikasi JSON-RPC 2.0 antara MCP Client (seperti Claude / AI Agent)
-//! dan server, serta memetakan eksekusi `tools/call` ke metode query database SQLite yang menghasilkan
-//! output berformat Markdown (`.md`).
+//! This module manages JSON-RPC 2.0 communication between MCP Clients (such as Claude / AI Agents)
+//! and the server, mapping `tools/call` executions to SQLite database query methods
+//! that return Markdown (`.md`) formatted output.
 
 pub mod tools;
 
@@ -10,48 +10,48 @@ use crate::db::DbManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// Struktur DTO untuk merepresentasikan permintaan (Request) JSON-RPC 2.0 dari client.
+/// DTO representing an incoming JSON-RPC 2.0 Request from the client.
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub struct JsonRpcRequest {
-    /// Versi protokol JSON-RPC (biasanya `"2.0"`).
+    /// JSON-RPC protocol version (typically `"2.0"`).
     pub jsonrpc: String,
-    /// ID unik permintaan dari client (bisa berupa angka, string, atau null).
+    /// Unique request ID supplied by the client (can be number, string, or null).
     pub id: Option<Value>,
-    /// Nama metode JSON-RPC yang dipanggil (misal: `"initialize"`, `"tools/list"`, `"tools/call"`).
+    /// JSON-RPC method name invoked (e.g., `"initialize"`, `"tools/list"`, `"tools/call"`).
     pub method: String,
-    /// Parameter tambahan yang dikirimkan dalam permintaan.
+    /// Additional payload parameters attached to the request.
     pub params: Option<Value>,
 }
 
-/// Struktur DTO untuk merepresentasikan tanggapan (Response) JSON-RPC 2.0 ke client.
+/// DTO representing an outgoing JSON-RPC 2.0 Response to the client.
 #[derive(Serialize)]
 pub struct JsonRpcResponse {
-    /// Versi protokol JSON-RPC (`"2.0"`).
+    /// JSON-RPC protocol version (`"2.0"`).
     pub jsonrpc: String,
-    /// ID permintaan yang sesuai dengan ID pada `JsonRpcRequest`.
+    /// Request ID matching the corresponding `JsonRpcRequest`.
     pub id: Option<Value>,
-    /// Objek hasil eksekusi jika permintaan berhasil.
+    /// Execution result object upon successful request handling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    /// Objek error jika terjadi kegagalan pemrosesan JSON-RPC.
+    /// Error object if JSON-RPC processing fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Value>,
 }
 
-/// Memproses permintaan JSON-RPC yang masuk dan mengembalikan tanggapan `JsonRpcResponse`.
+/// Processes incoming JSON-RPC requests and returns a structured `JsonRpcResponse`.
 ///
-/// Fungsi ini menangani tiga metode utama sesuai spesifikasi MCP:
-/// - `"initialize"`: Inisialisasi awal server dan pengiriman kapabilitas.
-/// - `"tools/list"`: Mengembalikan daftar seluruh tool MCP yang tersedia dari modul `tools`.
-/// - `"tools/call"`: Mengeksekusi fungsi query Markdown di `DbManager` berdasarkan nama tool dan argumen yang diberikan.
+/// Handles three core endpoints per the MCP specification:
+/// - `"initialize"`: Performs initial server handshake and capability reporting.
+/// - `"tools/list"`: Returns schemas for all available MCP tools defined in the `tools` module.
+/// - `"tools/call"`: Executes `DbManager` Markdown query functions matching tool name and arguments.
 ///
 /// # Arguments
-/// * `db` - Referensi ke `DbManager` untuk melakukan query data dokumentasi.
-/// * `req` - Struktur `JsonRpcRequest` yang berisi payload permintaan dari client.
+/// * `db` - Reference to the [`DbManager`] instance for querying documentation data.
+/// * `req` - [`JsonRpcRequest`] payload received from the client.
 ///
 /// # Returns
-/// Mengembalikan objek `JsonRpcResponse` berisi teks Markdown atau pesan error JSON-RPC.
+/// Returns a [`JsonRpcResponse`] containing Markdown formatted content or JSON-RPC error objects.
 pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> JsonRpcResponse {
     match req.method.as_str() {
         "initialize" => JsonRpcResponse {
@@ -86,82 +86,62 @@ pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> JsonRpcRespon
             let name = params["name"].as_str().unwrap_or("");
             let args = &params["arguments"];
 
+            // Helper to format Result<String> queries into standard MCP content objects
+            let format_response = |res: anyhow::Result<String>| match res {
+                Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
+                Err(e) => {
+                    json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })
+                }
+            };
+
             let content = match name {
-                // --- 1. Eksplorasi & Discovery ---
-                "get_crate_list" => match db.get_crate_list() {
-                    Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                    Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                },
+                // --- 1. Discovery & Exploration ---
+                "get_crate_list" => format_response(db.get_crate_list()),
                 "search_symbols" => {
                     let query = args["query"].as_str().unwrap_or("");
                     let kind = args["kind"].as_str();
-                    match db.search(query, kind) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.search(query, kind))
                 }
                 "get_module_contents" => {
                     let module_path = args["module_path"].as_str().unwrap_or("");
-                    match db.get_module_contents(module_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_module_contents(module_path))
                 }
 
-                // --- 2. Pembacaan Detail Tipe & API ---
+                // --- 2. Type & API Inspection ---
                 "get_type_definition" => {
                     let full_path = args["full_path"].as_str().unwrap_or("");
-                    match db.get_type_definition(full_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_type_definition(full_path))
                 }
                 "get_function_signature" => {
                     let full_path = args["full_path"].as_str().unwrap_or("");
-                    match db.get_function_signature(full_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_function_signature(full_path))
                 }
                 "get_associated_methods" => {
                     let struct_path = args["struct_path"].as_str().unwrap_or("");
-                    match db.get_associated_methods(struct_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_associated_methods(struct_path))
                 }
                 "get_struct_fields" => {
                     let struct_path = args["struct_path"].as_str().unwrap_or("");
-                    match db.get_struct_fields(struct_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_struct_fields(struct_path))
                 }
 
-                // --- 3. Relasi, Contoh Kode & Advanced Metadata ---
+                // --- 3. Relations, Code Examples & Metadata ---
                 "get_trait_impls" => {
                     let struct_path = args["struct_path"].as_str().unwrap_or("");
-                    match db.get_trait_impls(struct_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_trait_impls(struct_path))
                 }
                 "search_examples" => {
                     let full_path = args["full_path"].as_str().unwrap_or("");
-                    match db.search_examples(full_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.search_examples(full_path))
                 }
                 "get_reexports" => {
                     let full_path = args["full_path"].as_str().unwrap_or("");
-                    match db.get_reexports(full_path) {
-                        Ok(md) => json!({ "content": [{ "type": "text", "text": md }] }),
-                        Err(e) => json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true }),
-                    }
+                    format_response(db.get_reexports(full_path))
                 }
 
-                _ => json!({ "content": [{ "type": "text", "text": "Unknown tool" }], "isError": true }),
+                _ => {
+                    json!({ "content": [{ "type": "text", "text": "Unknown tool" }], "isError": true })
+                }
             };
 
             JsonRpcResponse {

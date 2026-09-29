@@ -1,25 +1,25 @@
-//! Modul query database SQLite untuk penyediaan data simbol dokumentasi Rust.
+//! SQLite query module for serving Rust documentation symbol data.
 //!
-//! Modul ini menyediakan implementasi metode pencarian, ekstraksi tipe data,
-//! navigasi modul, hingga pengambil sampel kode yang langsung diformat ke Markdown (`.md`)
-//! untuk dikonsumsi oleh AI Agent via MCP Server.
+//! This module provides methods for symbol searches, type definitions,
+//! module navigation, and code example extraction directly formatted into
+//! Markdown (`.md`) for consumption by AI Agents via the MCP Server.
 
 use super::DbManager;
 use anyhow::Result;
 use rusqlite::params;
 
 impl DbManager {
-    /// Mengambil daftar semua crate beserta versinya yang sudah ter-index dalam bentuk List Markdown.
+    /// Retrieves a list of all indexed crates and their versions as a Markdown list.
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi daftar crate dan versi berformat Markdown list.
+    /// Returns a `Result<String>` containing the list of crates and versions formatted as Markdown.
     ///
     /// # Errors
-    /// Mengembalikan error jika eksekusi SQL prepared statement gagal.
+    /// Returns an error if SQL prepared statement execution fails.
     pub fn get_crate_list(&self) -> Result<String> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT crate_name, crate_version FROM items ORDER BY crate_name",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT crate_name, crate_version FROM items ORDER BY crate_name")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -34,23 +34,25 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok("Belum ada crate yang ter-index di database.".to_string());
+            return Ok("No indexed crates found in the database.".to_string());
         }
 
         Ok(md)
     }
 
-    /// Melakukan pencarian simbol berbasis FTS5 yang disajikan dalam bentuk Tabel Markdown.
+    /// Performs FTS5 full-text symbol search and returns the results as a Markdown Table.
+    ///
+    /// Output is capped at 50 records to prevent excessive LLM token usage.
     ///
     /// # Arguments
-    /// * `query` - Kata kunci nama atau path simbol yang dicari.
-    /// * `kind_filter` - Filter tipe item opsional (misal: `"struct"`, `"function"`, `"trait"`, `"enum"`).
+    /// * `query` - Keyword matching symbol name or path.
+    /// * `kind_filter` - Optional item type filter (e.g., `"struct"`, `"function"`, `"trait"`, `"enum"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berupa tabel Markdown yang memuat hasil pencarian.
+    /// Returns a `Result<String>` containing a Markdown table with the search results.
     ///
     /// # Errors
-    /// Mengembalikan error jika pencarian FTS5 gagal dieksekusi.
+    /// Returns an error if FTS5 query execution fails.
     pub fn search(&self, query: &str, kind_filter: Option<&str>) -> Result<String> {
         let clean_query = query
             .chars()
@@ -58,7 +60,7 @@ impl DbManager {
             .collect::<String>();
 
         if clean_query.is_empty() {
-            return Ok("Query pencarian kosong.".to_string());
+            return Ok("Search query is empty.".to_string());
         }
 
         let formatted_query = format!("{}*", clean_query);
@@ -71,6 +73,9 @@ impl DbManager {
         if let Some(kind) = kind_filter {
             sql.push_str(&format!(" AND kind = '{}'", kind));
         }
+
+        // Limit results to 50 rows to optimize LLM context window token usage
+        sql.push_str(" LIMIT 50");
 
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![formatted_query], |row| {
@@ -99,22 +104,22 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok(format!("Tidak ditemukan simbol yang cocok dengan query `{}`.", query));
+            return Ok(format!("No symbols found matching query `{}`.", query));
         }
 
         Ok(md)
     }
 
-    /// Mengambil daftar isi item dalam suatu modul dalam bentuk Tabel Markdown.
+    /// Retrieves module items in Markdown Table format.
     ///
     /// # Arguments
-    /// * `module_path` - Canonical path dari modul induk (contoh: `"rusqlite::types"`).
+    /// * `module_path` - Canonical path of the parent module (e.g., `"rusqlite::types"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi daftar item anak dalam bentuk tabel Markdown.
+    /// Returns a `Result<String>` listing child items as a Markdown table.
     ///
     /// # Errors
-    /// Mengembalikan error jika prepared statement SQL mengalami kegagalan.
+    /// Returns an error if SQL statement preparation fails.
     pub fn get_module_contents(&self, module_path: &str) -> Result<String> {
         let mut stmt = self.conn.prepare(
             "SELECT kind, name, full_path, docs FROM items WHERE parent_path = ?1 ORDER BY kind, name",
@@ -144,22 +149,25 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok(format!("Modul `{}` kosong atau tidak ditemukan.", module_path));
+            return Ok(format!(
+                "Module `{}` is empty or was not found.",
+                module_path
+            ));
         }
 
         Ok(md)
     }
 
-    /// Mengambil definisi tipe lengkap, signature (blok kode Rust), dan dokumentasi penuh.
+    /// Retrieves full type definition, code signature block, and documentation string.
     ///
     /// # Arguments
-    /// * `full_path` - Path lengkap ke simbol (contoh: `"rusqlite::Connection"`).
+    /// * `full_path` - Canonical path to the symbol (e.g., `"rusqlite::Connection"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berupa teks Markdown berisi metadata, signature kode, dan docstring.
+    /// Returns a `Result<String>` containing Markdown text with symbol metadata, signature, and docstring.
     ///
     /// # Errors
-    /// Mengembalikan error jika pembacaan dari database gagal.
+    /// Returns an error if reading from the database fails.
     pub fn get_type_definition(&self, full_path: &str) -> Result<String> {
         let mut stmt = self.conn.prepare(
             "SELECT crate_name, kind, name, full_path, docs, signature FROM items WHERE full_path = ?1",
@@ -190,20 +198,20 @@ impl DbManager {
 
             Ok(md)
         } else {
-            Ok(format!("Simbol `{}` tidak ditemukan.", full_path))
+            Ok(format!("Symbol `{}` was not found.", full_path))
         }
     }
 
-    /// Mengambil ringkasan signature fungsi/method dalam blok kode Rust.
+    /// Retrieves function or method signature formatted as a Rust code block.
     ///
     /// # Arguments
-    /// * `full_path` - Path lengkap ke fungsi/method (contoh: `"rusqlite::Connection::open"`).
+    /// * `full_path` - Canonical path to the function/method (e.g., `"rusqlite::Connection::open"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi signature fungsi dalam blok kode Markdown.
+    /// Returns a `Result<String>` containing the function signature in a Markdown code block.
     ///
     /// # Errors
-    /// Mengembalikan error jika terjadi kegagalan query SQL.
+    /// Returns an error if SQL query execution fails.
     pub fn get_function_signature(&self, full_path: &str) -> Result<String> {
         let mut stmt = self.conn.prepare(
             "SELECT full_path, signature FROM items WHERE full_path = ?1 AND kind = 'function'",
@@ -220,20 +228,20 @@ impl DbManager {
 
             Ok(md)
         } else {
-            Ok(format!("Fungsi `{}` tidak ditemukan.", full_path))
+            Ok(format!("Function `{}` was not found.", full_path))
         }
     }
 
-    /// Mengambil daftar method/fungsi terhubung milik sebuah Struct/Enum.
+    /// Retrieves associated methods and functions belonging to a Struct or Enum.
     ///
     /// # Arguments
-    /// * `struct_path` - Path lengkap dari Struct atau Enum (contoh: `"rusqlite::Connection"`).
+    /// * `struct_path` - Canonical path of the Struct or Enum (e.g., `"rusqlite::Connection"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi daftar method berformat Markdown.
+    /// Returns a `Result<String>` listing associated methods in Markdown format.
     ///
     /// # Errors
-    /// Mengembalikan error jika pembacaan tabel SQLite bermasalah.
+    /// Returns an error if querying SQLite fails.
     pub fn get_associated_methods(&self, struct_path: &str) -> Result<String> {
         let parent_pattern = format!("{}::%", struct_path);
         let mut stmt = self.conn.prepare(
@@ -268,22 +276,25 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok(format!("Tidak ditemukan associated methods untuk `{}`.", struct_path));
+            return Ok(format!(
+                "No associated methods found for `{}`.",
+                struct_path
+            ));
         }
 
         Ok(md)
     }
 
-    /// Mengambil daftar field internal Struct atau variant dari Enum.
+    /// Retrieves internal fields of a Struct or variants of an Enum.
     ///
     /// # Arguments
-    /// * `struct_path` - Path lengkap Struct atau Enum (contoh: `"rusqlite::OpenFlags"`).
+    /// * `struct_path` - Canonical path of the Struct or Enum (e.g., `"rusqlite::OpenFlags"`).
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi tabel Markdown dari field atau variant.
+    /// Returns a `Result<String>` containing a Markdown table of fields or variants.
     ///
     /// # Errors
-    /// Mengembalikan error jika eksekusi SQL gagal.
+    /// Returns an error if SQL execution fails.
     pub fn get_struct_fields(&self, struct_path: &str) -> Result<String> {
         let parent_pattern = format!("{}::%", struct_path);
         let mut stmt = self.conn.prepare(
@@ -310,28 +321,34 @@ impl DbManager {
         for r in rows.flatten() {
             md.push_str(&format!(
                 "| **{}** | `{}` | `{}` | {} |\n",
-                r.0, r.1, r.3, r.4.replace('\n', " ")
+                r.0,
+                r.1,
+                r.3,
+                r.4.replace('\n', " ")
             ));
             count += 1;
         }
 
         if count == 0 {
-            return Ok(format!("Tidak ditemukan field/variant untuk `{}`.", struct_path));
+            return Ok(format!(
+                "No fields or variants found for `{}`.",
+                struct_path
+            ));
         }
 
         Ok(md)
     }
 
-    /// Mengambil daftar Trait yang diimplementasikan oleh sebuah Struct/Enum.
+    /// Retrieves trait implementations attached to a Struct or Enum.
     ///
     /// # Arguments
-    /// * `struct_path` - Path lengkap Struct atau Enum yang dicari implementasi trait-nya.
+    /// * `struct_path` - Canonical path of the Struct or Enum.
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi daftar blok `impl` berformat Markdown.
+    /// Returns a `Result<String>` containing `impl` blocks formatted in Markdown.
     ///
     /// # Errors
-    /// Mengembalikan error jika query wildcard SQLite gagal.
+    /// Returns an error if SQLite query pattern fails.
     pub fn get_trait_impls(&self, struct_path: &str) -> Result<String> {
         let search_pattern = format!("%impl%for%{}%", struct_path);
         let mut stmt = self.conn.prepare(
@@ -360,26 +377,29 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok(format!("Tidak ditemukan implementasi trait untuk `{}`.", struct_path));
+            return Ok(format!(
+                "No trait implementations found for `{}`.",
+                struct_path
+            ));
         }
 
         Ok(md)
     }
 
-    /// Mengekstrak seluruh blok contoh kode (` ```rust ... ``` `) dari dokumentasi simbol.
+    /// Extracts code example blocks (` ```rust ... ``` `) embedded within symbol documentation.
     ///
     /// # Arguments
-    /// * `full_path` - Path lengkap simbol yang dicari contoh kodenya.
+    /// * `full_path` - Canonical path of the symbol.
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi potongan contoh kode yang diformat dalam Markdown.
+    /// Returns a `Result<String>` containing extracted code snippets formatted in Markdown.
     ///
     /// # Errors
-    /// Mengembalikan error jika prepared statement atau query ke tabel `items` mengalami kegagalan.
+    /// Returns an error if database statement or query fails.
     pub fn search_examples(&self, full_path: &str) -> Result<String> {
-        let mut stmt = self.conn.prepare(
-            "SELECT docs FROM items WHERE full_path = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT docs FROM items WHERE full_path = ?1")?;
 
         let mut rows = stmt.query(params![full_path])?;
         let mut md = format!("### Code Examples for `{}`\n\n", full_path);
@@ -412,22 +432,22 @@ impl DbManager {
         }
 
         if example_count == 0 {
-            return Ok(format!("Tidak ditemukan contoh kode untuk `{}`.", full_path));
+            return Ok(format!("No code examples found for `{}`.", full_path));
         }
 
         Ok(md)
     }
 
-    /// Memeriksa apakah suatu simbol merupakan alias tipe data atau *re-export* (`pub use`).
+    /// Resolves type aliases or re-exported symbols (`pub use`).
     ///
     /// # Arguments
-    /// * `full_path` - Path alias yang ingin diperiksa target aslinya.
+    /// * `full_path` - Path of the alias to inspect.
     ///
     /// # Returns
-    /// Mengembalikan `Result<String>` berisi daftar alias dan tipe aslinya berformat Markdown.
+    /// Returns a `Result<String>` containing alias and target mapping in Markdown format.
     ///
     /// # Errors
-    /// Mengembalikan error jika query SQLite bermasalah.
+    /// Returns an error if SQLite query execution encounters issues.
     pub fn get_reexports(&self, full_path: &str) -> Result<String> {
         let mut stmt = self.conn.prepare(
             "SELECT name, full_path, signature FROM items WHERE kind = 'type_alias' AND full_path = ?1",
@@ -452,7 +472,10 @@ impl DbManager {
         }
 
         if count == 0 {
-            return Ok(format!("Tidak ditemukan alias/re-export untuk `{}`.", full_path));
+            return Ok(format!(
+                "No type aliases or re-exports found for `{}`.",
+                full_path
+            ));
         }
 
         Ok(md)

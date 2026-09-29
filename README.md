@@ -1,90 +1,153 @@
-# rustdoc-mcp-server
+# Rustdoc MCP Server
 
-`rustdoc-mcp-server` is a high-performance server application designed to support the Model Context Protocol (MCP) via JSON-RPC 2.0. It provides a platform for exploring and querying Rust documentation artifacts stored in a local SQLite database with FTS5 indexing.
+`Rustdoc MCP Server` is a high-performance Model Context Protocol (MCP) server built in Rust. It enables AI Assistants (such as Claude Desktop, Cursor, Zed, and Windsurf) to instantly explore, search, and query local Rust documentation artifacts stored in a local SQLite database with FTS5 indexing.
 
 ---
 
 ## Features
 
-- **SQLite Database Integration**: Utilizes SQLite with Write-Ahead Logging (WAL) mode for concurrent high-performance queries.
-- **FTS5 Full-Text Search**: Enables fast and flexible retrieval of Rust documentation metadata.
-- **JSON-RPC Support**: Implements asynchronous request/response handling over JSON-RPC 2.0.
-- **Background Indexing**: Parses and indexes Rust documentation artifacts in the background for up-to-date content.
-- **Modular Design**: Organized into database management, MCP request handling, and tool execution modules.
-
----
-
-## Components Overview
-
-### Main Modules
-
-#### 1. **[`db` Module](src/db)**
-- Responsible for SQLite database initialization and management.
-- Implements schema creation, database optimizations, and triggers.
-- Handles Full-Text Search queries through the `items_fts` virtual table.
-
-#### 2. **[`mcp` Module](src/mcp)**
-- Coordinates JSON-RPC communication between clients and the server.
-- Maps incoming RPC commands to the appropriate tools and database queries.
-- Provides structured JSON responses for a variety of client operations.
+- **SQLite Database Integration**: Utilizes SQLite with Write-Ahead Logging (WAL) mode and fine-tuned PRAGMA settings for ultra-fast, concurrent queries (<10ms response time).
+- **FTS5 Full-Text Search**: Fast, ranked retrieval of Rust symbols, signatures, and docstrings.
+- **Automated Rustdoc Generation**: Automatically detects missing documentation and executes `cargo doc` in the background—no manual build steps required.
+- **Dynamic Crate Recognition**: Automatically parses `Cargo.toml` to extract the local crate name and direct dependencies without hardcoded paths.
+- **Incremental Indexing**: Efficiently updates documentation on a per-crate basis when dependencies or code change.
+- **JSON-RPC 2.0 via STDIO**: Fully compliant with the MCP specification over standard input/output.
+- **LLM-Optimized Output**: Formats all tool query results into rich Markdown tables, code blocks, and lists ready for LLM consumption.
 
 ---
 
 ## How It Works
 
-### 1. Initialization
-The server initializes an `DbManager` with SQLite connection pooling and starts background indexing tasks. These tasks ensure that the documentation database is regularly synchronized with the target Rust project.
+### 1. Zero-Config Initialization
 
-### 2. JSON-RPC Communication
-The server reads input requests over `stdin` and responds to `stdout` in real-time. Supported JSON-RPC operations include:
-- `initialize`: Establish capability handshake with the client.
-- `tools/list`: Return the full list of available tools.
-- `tools/call`: Execute specific database queries and return formatted Markdown results.
+When launched, `rustdoc-mcp-server` initializes a read-only SQLite connection for immediate client handshakes (`<10ms`). In parallel, it triggers a non-blocking background task to:
 
-### 3. Tools & Queries
-MCP tools allow flexible, specialized queries such as:
-- Listing crates and modules
-- Searching documentation symbols
-- Retrieving function signatures, struct fields, or trait implementations
-- Extracting code examples and relationships
+1. Parse the local project's `Cargo.toml` for crate names and direct dependencies.
+2. Check `target/doc` for generated JSON artifacts. If missing, it automatically runs `cargo +nightly doc --no-deps -Zunstable-options --output-format json`.
+3. Index new or updated symbols into the SQLite FTS5 database.
+
+### 2. MCP JSON-RPC Communication
+
+Communicating via `stdin` and `stdout`, the server handles standard MCP endpoints:
+
+- `initialize`: Performs capabilities handshake.
+- `tools/list`: Returns schemas for available documentation tools.
+- `tools/call`: Executes SQL queries and returns formatted Markdown responses.
+
+---
+
+## MCP Tools Reference
+
+The server registers 10 specialized tools categorized into three groups:
+
+### 1. Discovery & Exploration
+
+- **`get_crate_list`**: Lists all currently indexed crates and their versions.
+- **`search_symbols`**: Full-text search across symbols with optional `kind` filtering (e.g., `struct`, `function`, `trait`, `enum`).
+- **`get_module_contents`**: Lists all items inside a specific module path (e.g., `rusqlite::types`).
+
+### 2. Type & API Inspection
+
+- **`get_type_definition`**: Retrieves full struct/enum definitions, signatures, and docstrings.
+- **`get_function_signature`**: Fetches exact function/method signatures (parameters, generic bounds, return types).
+- **`get_associated_methods`**: Lists all inherent methods (`impl` blocks) attached to a struct/enum.
+- **`get_struct_fields`**: Returns table of fields or enum variants for a given type.
+
+### 3. Relations & Examples
+
+- **`get_trait_impls`**: Lists traits implemented by a type.
+- **`search_examples`**: Extracts code blocks/doc-tests from symbol documentation.
+- **`get_reexports`**: Resolves type aliases (`pub use`) to their original target paths.
+
+---
+
+## Client Integration Guide
+
+### Zed Editor
+
+Add the server under `context_servers` in your `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "rustdoc-mcp": {
+      "enabled": true,
+      "command": "/path/to/rustdoc-mcp-server/target/release/rustdoc-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "rustdoc": {
+      "command": "/path/to/rustdoc-mcp-server/target/release/rustdoc-mcp-server",
+      "cwd": "/path/to/your/rust/project"
+    }
+  }
+}
+```
+
+### Cursor / Windsurf
+
+Configure an MCP server entry using STDIO transport pointing to the compiled binary location.
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-Ensure the following dependencies are installed:
-- **Rust Toolchain**: (Edition 2021)
-- **Cargo**: for building and managing Rust packages
 
-### Build and Run
+- **Rust Toolchain**: (Edition 2021)
+- **Nightly Toolchain** (Optional, for auto-generating rustdoc JSON):
+
+```bash
+$ rustup toolchain install nightly
+
+```
+
+### Build from Source
+
 ```bash
 # Clone repository
-$ git clone https://github.com/your-repo/rustdoc-mcp-server
+$ git clone [https://github.com/your-repo/rustdoc-mcp-server](https://github.com/your-repo/rustdoc-mcp-server)
 $ cd rustdoc-mcp-server
 
-# Build the project
+# Build optimized binary
 $ cargo build --release
 
-# Run the server
+# Run binary (or reference in your editor's MCP settings)
 $ ./target/release/rustdoc-mcp-server
+
 ```
+
 ---
 
 ## Database Schema
-The database contains two primary tables designed for fast symbol lookups:
-- **`items`**: Stores metadata about Rust symbols (e.g., structs, functions, enums).
-- **`items_fts`**: FTS5 table for full-text queries.
+
+The SQLite database (`target/rustdoc_mcp.sqlite`) utilizes two primary tables:
+
+- **`items`**: Stores raw symbol metadata (`id`, `crate_name`, `crate_version`, `kind`, `name`, `full_path`, `docs`, `signature`, `parent_path`).
+- **`items_fts`**: FTS5 virtual table indexing `name`, `full_path`, and `docs` with automated sync triggers.
 
 ---
 
 ## Contribution
-Contributions to `rustdoc-mcp-server` are welcome! To contribute, follow these steps:
-1. Fork the repository and create your branch.
-2. Commit your changes with descriptive messages.
-3. Open a Pull Request.
+
+Contributions to `rustdoc-mcp-server` are welcome! To contribute:
+
+1. Fork the repository and create your feature branch.
+2. Ensure your changes pass formatting and linting (`cargo fmt`, `cargo clippy`).
+3. Open a Pull Request with a clear description of changes.
 
 ---
 
 ## License
-This project is licensed under the MIT License.
+
+This project is licensed under the [MIT License](https://www.google.com/search?q=LICENSE).

@@ -1,9 +1,9 @@
-//! Entry point utama untuk server MCP `rustdoc-mcp-server`.
+//! Main entry point for the `rustdoc-mcp-server` application.
 //!
-//! File ini mengelola koneksi database SQLite FTS5 terpisah untuk *read* dan *write* (WAL mode),
-//! memicu *indexing background* secara non-blocking, serta memproses permintaan JSON-RPC 2.0 via STDIO.
+//! Handles dual SQLite FTS5 database connections for read/write isolation in WAL mode,
+//! triggers non-blocking background indexing tasks, and processes JSON-RPC 2.0 requests via STDIO.
 
-mod db;
+pub mod db;
 mod mcp;
 
 use anyhow::{Context, Result};
@@ -12,25 +12,25 @@ use mcp::{handle_mcp_request, JsonRpcRequest};
 use std::path::PathBuf;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// Fungsi entry point utama yang menjalankan runtime asinkronus Tokio.
+/// Main entry point running the Tokio asynchronous runtime.
 ///
-/// Alur kerja:
-/// 1. Menginisialisasi `DbManager` utama yang bertindak sebagai *Read Connection* (bebas lock contention).
-/// 2. Memicu koneksi SQLite terpisah (*Writer Connection*) di `tokio::task::spawn_blocking` untuk melakukan pemindaian & *indexing*.
-/// 3. Membaca baris permintaan JSON-RPC dari `stdin` secara asinkronus dan merespon ke `stdout` dengan latensi rendah (<10ms).
+/// Execution flow:
+/// 1. Initializes the primary [`DbManager`] acting as a dedicated Read connection (lock-free).
+/// 2. Spawns a separate Writer connection in `tokio::task::spawn_blocking` to perform background scanning and indexing.
+/// 3. Asynchronously reads incoming JSON-RPC requests line-by-line from `stdin` and writes responses to `stdout` (<10ms latency).
 ///
 /// # Errors
-/// Mengembalikan error jika file database SQLite gagal dibuka/dibuat atau terjadi kesalahan I/O fatal pada STDIO.
+/// Returns an error if SQLite database creation/initialization fails or an unrecoverable STDIO I/O error occurs.
 #[tokio::main]
 async fn main() -> Result<()> {
     let target_dir = PathBuf::from("target");
     let db_path = target_dir.join("rustdoc_mcp.sqlite");
 
-    // Inisialisasi koneksi utama untuk Read (bebas lock Mutex)
+    // Initialize primary Read connection (lock-free execution)
     let db = DbManager::new(&db_path)
-        .context("Gagal menginisialisasi database SQLite FTS5")?;
+        .context("Failed to initialize SQLite FTS5 database")?;
 
-    // Memicu indexing background menggunakan koneksi SQLite terpisah
+    // Trigger background indexing using a separate SQLite connection
     let db_path_bg = db_path.clone();
     tokio::task::spawn_blocking(move || {
         let doc_dir = target_dir.join("doc");
@@ -41,19 +41,19 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Inisialisasi pembaca STDIO untuk komunikasi JSON-RPC
+    // Initialize STDIO reader/writer for JSON-RPC 2.0 communication
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = io::stdout();
 
-    // Loop utama penanganan permintaan dari MCP Client
+    // Main event loop handling incoming requests from the MCP Client
     while let Ok(Some(line)) = reader.next_line().await {
         let req: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(_) => continue,
         };
 
-        // Langsung eksekusi query tanpa mengunci Mutex
+        // Execute queries directly against the read-only connection without Mutex locks
         let res = handle_mcp_request(&db, &req);
         let res_json = serde_json::to_string(&res)? + "\n";
         stdout.write_all(res_json.as_bytes()).await?;

@@ -1,28 +1,29 @@
-//! Modul pendaftaran dan penyedia skema Tool Model Context Protocol (MCP).
+//! Registration and schema provider module for Model Context Protocol (MCP) Tools.
 //!
-//! Modul ini mendefinisikan daftar seluruh tool MCP yang didukung oleh server,
-//! lengkap dengan nama, deskripsi berformat Markdown, serta skema JSON Schema dari argumen inputnya (`inputSchema`).
+//! This module defines the list of all MCP tools supported by the server,
+//! complete with tool names, Markdown-formatted descriptions, and JSON Schema definitions
+//! for input arguments (`inputSchema`).
 
 use serde_json::json;
 
-/// Mengembalikan objek JSON yang berisi skema dan deskripsi dari seluruh tool MCP yang tersedia.
+/// Returns a JSON object containing schemas and descriptions for all available MCP tools.
 ///
-/// Seluruh tool mengembalikan output berformat Markdown (`.md`) yang dioptimalkan untuk AI Agent/LLM.
+/// All tools return Markdown-formatted (`.md`) output optimized for LLM / AI Agent consumption.
 ///
-/// Tool yang terdaftar dikategorikan ke dalam tiga kelompok utama:
-/// 1. **Eksplorasi & Discovery**: `get_crate_list`, `search_symbols`, `get_module_contents`
-/// 2. **Pembacaan Detail Tipe & API**: `get_type_definition`, `get_function_signature`, `get_associated_methods`, `get_struct_fields`
-/// 3. **Relasi, Contoh Kode & Metadata**: `get_trait_impls`, `search_examples`, `get_reexports`
+/// Registered tools are categorized into three primary groups:
+/// 1. **Discovery & Exploration**: `get_crate_list`, `search_symbols`, `get_module_contents`
+/// 2. **Type & API Inspection**: `get_type_definition`, `get_function_signature`, `get_associated_methods`, `get_struct_fields`
+/// 3. **Relations, Code Examples & Metadata**: `get_trait_impls`, `search_examples`, `get_reexports`
 ///
 /// # Returns
-/// Mengembalikan `serde_json::Value` yang merepresentasikan respons JSON spesifikasi MCP untuk metode `tools/list`.
+/// Returns a `serde_json::Value` representing the MCP specification JSON response for the `tools/list` method.
 pub fn get_tools_list() -> serde_json::Value {
     json!({
         "tools": [
-            // --- 1. Eksplorasi & Discovery ---
+            // --- 1. Discovery & Exploration ---
             {
                 "name": "get_crate_list",
-                "description": "Dapatkan daftar semua crate beserta versinya yang saat ini ter-index di database (Format: Markdown List)",
+                "description": "Get a list of all currently indexed crates and their versions in the database (Format: Markdown List)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -30,104 +31,104 @@ pub fn get_tools_list() -> serde_json::Value {
             },
             {
                 "name": "search_symbols",
-                "description": "Cari fungsi, struct, enum, atau module di dokumentasi Rust menggunakan FTS5 dengan filter optional 'kind' (Format: Markdown Table)",
+                "description": "Search for functions, structs, enums, or modules in Rust documentation using FTS5 with an optional 'kind' filter (Format: Markdown Table)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "Nama simbol / kata kunci" },
-                        "kind": { "type": "string", "description": "Filter tipe simbol (misal: 'struct', 'function', 'trait', 'enum')" }
+                        "query": { "type": "string", "description": "Symbol name or search keyword" },
+                        "kind": { "type": "string", "description": "Optional symbol type filter (e.g., 'struct', 'function', 'trait', 'enum')" }
                     },
                     "required": ["query"]
                 }
             },
             {
                 "name": "get_module_contents",
-                "description": "Dapatkan daftar isi item (struct, function, sub-module) dalam suatu module (Format: Markdown Table)",
+                "description": "Get child items (structs, functions, sub-modules) contained inside a specific module path (Format: Markdown Table)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "module_path": { "type": "string", "description": "Contoh: rusqlite::types" }
+                        "module_path": { "type": "string", "description": "Canonical module path (e.g., rusqlite::types)" }
                     },
                     "required": ["module_path"]
                 }
             },
 
-            // --- 2. Pembacaan Detail Tipe & API ---
+            // --- 2. Type & API Inspection ---
             {
                 "name": "get_type_definition",
-                "description": "Ambil definisi struktur data, signature fungsi dalam blok kode Rust, dan docstrings lengkap (Format: Markdown)",
+                "description": "Get full data structure definitions, code block signatures, and docstrings for a symbol (Format: Markdown)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "full_path": { "type": "string", "description": "Contoh: rusqlite::Connection" }
+                        "full_path": { "type": "string", "description": "Canonical path (e.g., rusqlite::Connection)" }
                     },
                     "required": ["full_path"]
                 }
             },
             {
                 "name": "get_function_signature",
-                "description": "Ambil signature persis dari fungsi/method (parameter input, generic bounds, dan return type) tanpa docstring panjang (Format: Markdown Code Block)",
+                "description": "Get exact function or method signature (parameters, generic bounds, and return type) without long docstrings (Format: Markdown Code Block)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "full_path": { "type": "string", "description": "Contoh: rusqlite::Connection::open_with_flags" }
+                        "full_path": { "type": "string", "description": "Canonical path (e.g., rusqlite::Connection::open_with_flags)" }
                     },
                     "required": ["full_path"]
                 }
             },
             {
                 "name": "get_associated_methods",
-                "description": "Dapatkan daftar semua method/fungsi yang terhubung (inherent impls) dengan Struct atau Enum tertentu (Format: Markdown)",
+                "description": "Get a list of all associated methods or functions (inherent impls) attached to a specific Struct or Enum (Format: Markdown)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "struct_path": { "type": "string", "description": "Contoh: rusqlite::Connection" }
+                        "struct_path": { "type": "string", "description": "Canonical struct/enum path (e.g., rusqlite::Connection)" }
                     },
                     "required": ["struct_path"]
                 }
             },
             {
                 "name": "get_struct_fields",
-                "description": "Dapatkan daftar seluruh field beserta tipe datanya untuk Struct tertentu atau variant dari Enum (Format: Markdown Table)",
+                "description": "Get fields and types for a Struct or variants for an Enum (Format: Markdown Table)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "struct_path": { "type": "string", "description": "Contoh: rusqlite::OpenFlags" }
+                        "struct_path": { "type": "string", "description": "Canonical struct/enum path (e.g., rusqlite::OpenFlags)" }
                     },
                     "required": ["struct_path"]
                 }
             },
 
-            // --- 3. Relasi, Contoh Kode & Advanced Metadata ---
+            // --- 3. Relations, Code Examples & Metadata ---
             {
                 "name": "get_trait_impls",
-                "description": "Dapatkan daftar Trait yang diimplementasikan oleh suatu tipe data (Struct/Enum) (Format: Markdown Code Blocks)",
+                "description": "Get a list of traits implemented by a given type (Struct or Enum) (Format: Markdown Code Blocks)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "struct_path": { "type": "string", "description": "Contoh: rusqlite::Connection" }
+                        "struct_path": { "type": "string", "description": "Canonical type path (e.g., rusqlite::Connection)" }
                     },
                     "required": ["struct_path"]
                 }
             },
             {
                 "name": "search_examples",
-                "description": "Ambil contoh kode penggunaan (code snippets / doc-tests) untuk simbol atau path tertentu (Format: Markdown Code Blocks)",
+                "description": "Extract usage code snippets or doc-tests embedded within documentation for a symbol (Format: Markdown Code Blocks)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "full_path": { "type": "string", "description": "Contoh: rusqlite::Connection::transaction" }
+                        "full_path": { "type": "string", "description": "Canonical symbol path (e.g., rusqlite::Connection::transaction)" }
                     },
                     "required": ["full_path"]
                 }
             },
             {
                 "name": "get_reexports",
-                "description": "Cek apakah suatu item merupakan re-export (pub use) dan dapatkan path aslinya (Format: Markdown List)",
+                "description": "Check if a symbol is a re-export (pub use / type alias) and resolve its original target path (Format: Markdown List)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "full_path": { "type": "string", "description": "Contoh: rusqlite::Error" }
+                        "full_path": { "type": "string", "description": "Canonical alias path (e.g., rusqlite::Error)" }
                     },
                     "required": ["full_path"]
                 }
