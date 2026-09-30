@@ -6,6 +6,8 @@
 
 use serde_json::json;
 
+use crate::db::indexer::supported_kinds;
+
 /// Returns a JSON object containing schemas and descriptions for all available MCP tools.
 ///
 /// All tools return Markdown-formatted (`.md`) output optimized for LLM / AI Agent consumption.
@@ -35,8 +37,15 @@ pub fn get_tools_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "Symbol name or search keyword" },
-                        "kind": { "type": "string", "description": "Optional symbol type filter (e.g., 'struct', 'function', 'trait', 'enum')" }
+                        "query": {
+                            "type": "string",
+                            "description": "Symbol name or search keyword"
+                        },
+                        "kind": {
+                            "type": "string",
+                            "description": "Optional symbol type filter",
+                            "enum": supported_kinds()
+                        }
                     },
                     "required": ["query"]
                 }

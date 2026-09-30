@@ -3,6 +3,8 @@
 //! This module manages JSON-RPC 2.0 communication between MCP Clients (such as Claude / AI Agents)
 //! and the server, mapping `tools/call` executions to SQLite database query methods
 //! that return Markdown (`.md`) formatted output.
+//!
+//! Fully compliant with the MCP `2025-11-25` specification.
 
 pub mod tools;
 
@@ -10,13 +12,14 @@ use crate::db::DbManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// DTO representing an incoming JSON-RPC 2.0 Request from the client.
+/// DTO representing an incoming JSON-RPC 2.0 Request or Notification from the client.
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub struct JsonRpcRequest {
     /// JSON-RPC protocol version (typically `"2.0"`).
     pub jsonrpc: String,
     /// Unique request ID supplied by the client (can be number, string, or null).
+    /// Optional because JSON-RPC notifications do not include an `id`.
     pub id: Option<Value>,
     /// JSON-RPC method name invoked (e.g., `"initialize"`, `"tools/list"`, `"tools/call"`).
     pub method: String,
@@ -39,10 +42,11 @@ pub struct JsonRpcResponse {
     pub error: Option<Value>,
 }
 
-/// Processes incoming JSON-RPC requests and returns a structured `JsonRpcResponse`.
+/// Processes incoming JSON-RPC requests and returns a structured `Option<JsonRpcResponse>`.
 ///
-/// Handles three core endpoints per the MCP specification:
-/// - `"initialize"`: Performs initial server handshake and capability reporting.
+/// Handles core endpoints per the MCP `2025-11-25` specification:
+/// - `"initialize"`: Performs initial server handshake and capability negotiation under version `"2025-11-25"`.
+/// - `"notifications/initialized"`: Acknowledges client initialization notification (returns `None` per JSON-RPC notification specs).
 /// - `"tools/list"`: Returns schemas for all available MCP tools defined in the `tools` module.
 /// - `"tools/call"`: Executes `DbManager` Markdown query functions matching tool name and arguments.
 ///
@@ -51,35 +55,48 @@ pub struct JsonRpcResponse {
 /// * `req` - [`JsonRpcRequest`] payload received from the client.
 ///
 /// # Returns
-/// Returns a [`JsonRpcResponse`] containing Markdown formatted content or JSON-RPC error objects.
-pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> JsonRpcResponse {
+/// Returns `Some(JsonRpcResponse)` for normal requests or `None` if the input is a notification.
+pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     match req.method.as_str() {
-        "initialize" => JsonRpcResponse {
+        // --- MCP 2025-11-25 Handshake ---
+        "initialize" => Some(JsonRpcResponse {
             jsonrpc: "2.0".into(),
             id: req.id.clone(),
             result: Some(json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "rustdoc-mcp-server", "version": "0.1.0" }
+                "protocolVersion": "2025-11-25",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "rustdoc-mcp-server",
+                    "version": "0.1.0"
+                }
             })),
             error: None,
-        },
-        "tools/list" => JsonRpcResponse {
+        }),
+
+        // Client acknowledges handshake initialization (Notification: no response returned)
+        "notifications/initialized" | "initialized" => None,
+
+        // --- Tools Discovery ---
+        "tools/list" => Some(JsonRpcResponse {
             jsonrpc: "2.0".into(),
             id: req.id.clone(),
             result: Some(tools::get_tools_list()),
             error: None,
-        },
+        }),
+
+        // --- Tools Execution ---
         "tools/call" => {
             let params = match req.params.as_ref() {
                 Some(p) => p,
                 None => {
-                    return JsonRpcResponse {
+                    return Some(JsonRpcResponse {
                         jsonrpc: "2.0".into(),
                         id: req.id.clone(),
                         result: None,
                         error: Some(json!({ "code": -32602, "message": "Invalid params" })),
-                    }
+                    });
                 }
             };
 
@@ -99,7 +116,7 @@ pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> JsonRpcRespon
                 "get_crate_list" => format_response(db.get_crate_list()),
                 "search_symbols" => {
                     let query = args["query"].as_str().unwrap_or("");
-                    let kind = args["kind"].as_str();
+                    let kind = args["kind"].as_str().filter(|k| !k.trim().is_empty());
                     format_response(db.search(query, kind))
                 }
                 "get_module_contents" => {
@@ -144,18 +161,20 @@ pub fn handle_mcp_request(db: &DbManager, req: &JsonRpcRequest) -> JsonRpcRespon
                 }
             };
 
-            JsonRpcResponse {
+            Some(JsonRpcResponse {
                 jsonrpc: "2.0".into(),
                 id: req.id.clone(),
                 result: Some(content),
                 error: None,
-            }
+            })
         }
-        _ => JsonRpcResponse {
+
+        // --- Unknown Methods Handling ---
+        _ => Some(JsonRpcResponse {
             jsonrpc: "2.0".into(),
             id: req.id.clone(),
             result: None,
             error: Some(json!({ "code": -32601, "message": "Method not found" })),
-        },
+        }),
     }
 }

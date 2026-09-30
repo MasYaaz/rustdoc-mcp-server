@@ -15,6 +15,60 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
+/// Maps `rustdoc_types::ItemEnum` variants directly to their variant string representations.
+///
+/// Returns `None` for internal or structural items (e.g., `StructField`) that should be skipped
+/// during primary top-level indexing.
+pub fn item_enum_to_kind(item_enum: &ItemEnum) -> Option<&'static str> {
+    match item_enum {
+        ItemEnum::Struct(_) => Some("Struct"),
+        ItemEnum::Enum(_) => Some("Enum"),
+        ItemEnum::Function(_) => Some("Function"),
+        ItemEnum::Trait(_) => Some("Trait"),
+        ItemEnum::Module(_) => Some("Module"),
+        ItemEnum::TypeAlias(_) => Some("TypeAlias"),
+        ItemEnum::Constant { .. } => Some("Constant"),
+        ItemEnum::Static(_) => Some("Static"),
+        ItemEnum::Macro(_) => Some("Macro"),
+        ItemEnum::ProcMacro(_) => Some("ProcMacro"),
+        ItemEnum::AssocType { .. } => Some("AssocType"),
+        ItemEnum::AssocConst { .. } => Some("AssocConst"),
+        ItemEnum::Variant(_) => Some("Variant"),
+        ItemEnum::Impl(_) => Some("Impl"),
+        ItemEnum::StructField(_) => None, // Skipped during primary indexing
+        ItemEnum::Union(_) => Some("Union"),
+        ItemEnum::Primitive(_) => Some("Primitive"),
+        ItemEnum::ExternCrate { .. } => Some("ExternCrate"),
+        ItemEnum::Use(_) => Some("Use"),
+        _ => Some("Other"),
+    }
+}
+
+/// Returns all supported `ItemEnum` variant names for MCP schema validation.
+pub fn supported_kinds() -> Vec<&'static str> {
+    vec![
+        "Struct",
+        "Enum",
+        "Function",
+        "Trait",
+        "Module",
+        "TypeAlias",
+        "Constant",
+        "Static",
+        "Macro",
+        "ProcMacro",
+        "AssocType",
+        "AssocConst",
+        "Variant",
+        "Impl",
+        "Union",
+        "Primitive",
+        "ExternCrate",
+        "Use",
+        "Other",
+    ]
+}
+
 /// Contextual metadata for the local crate and its direct dependencies extracted from `Cargo.toml`.
 pub struct CrateContext {
     /// Name of the local crate (with `-` replaced by `_`).
@@ -91,23 +145,10 @@ impl DbManager {
                 continue;
             }
 
-            let kind = match &item.inner {
-                ItemEnum::Struct(_) => "struct",
-                ItemEnum::Enum(_) => "enum",
-                ItemEnum::Function(_) => "function",
-                ItemEnum::Trait(_) => "trait",
-                ItemEnum::Module(_) => "module",
-                ItemEnum::TypeAlias(_) => "type_alias",
-                ItemEnum::Constant { .. } => "constant",
-                ItemEnum::Static(_) => "static",
-                ItemEnum::Macro(_) => "macro",
-                ItemEnum::ProcMacro(_) => "proc_macro",
-                ItemEnum::StructField(_) => continue,
-                ItemEnum::AssocType { .. } => "assoc_type",
-                ItemEnum::AssocConst { .. } => "assoc_const",
-                ItemEnum::Variant(_) => "enum_variant",
-                ItemEnum::Impl(_) => "impl",
-                _ => "other",
+            // Convert ItemEnum directly to its variant string representation
+            let kind = match item_enum_to_kind(&item.inner) {
+                Some(k) => k,
+                None => continue,
             };
 
             let is_in_paths = raw_crate.paths.contains_key(id);
